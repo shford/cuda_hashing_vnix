@@ -21,7 +21,7 @@ typedef struct
     uint8_t      bytes[MD5_HASH_SIZE];
 } MD5_HASH_dev;
 
-__device__ void memcpy_dtod(char* dst, char* src, int size)
+__device__ void memcpy_dtod(char* dst, const char* src, int size)
 {
     for (int byte = 0; byte <= size; ++byte)
     {
@@ -339,11 +339,11 @@ __global__ void find_collisions(volatile char* collision) {
             random_index = 0;
 
             // call curand_init outside the function
-            curandStatePhilox4_32_10_t state;
-            unsigned long long benchmark_seed = (threadIdx.x + blockIdx.x * blockDim.x) + global_seeder;
-            unsigned long long fair_seed = benchmark_seed + clock64();
-            curand_init(benchmark_seed, 0, 0, &state);
             for (int i = 0; i < FUNCTION_CALLS_NEEDED; ++i) {
+                curandStatePhilox4_32_10_t state;
+                unsigned long long benchmark_seed = (threadIdx.x + blockIdx.x * blockDim.x) + global_seeder;
+                unsigned long long fair_seed = benchmark_seed + clock64();
+                curand_init(benchmark_seed, i, 0, &state);
                 // effectively assigns 4 random uint8_t's per execution
                 *((uint32_t *) (randoms + i * RAND_BIT_MULTIPLE)) = curand(&state);
             }
@@ -391,17 +391,19 @@ __global__ void find_collisions(volatile char* collision) {
 
             // we found a collision!
             if ((*((uint32_t *) &d_const_md5_digest) >> 12 == *((uint32_t *) &local_md5_digest) >> 12) || sync_warp_flag == TRUE) {
-                printf("%d thread id in block %d found hash first in grid %d.\n", threadIdx.x, blockIdx.x);
+                printf("%d thread id in block %d found hash first in grid %d.\n", threadIdx.x, blockIdx.x, blockDim.x);
 
                 // synchronize all threads in warp, and get "value" from lane 0
                 if (lane_id_of_found_collision == -1) {
                     lane_id_of_found_collision = threadIdx.x & (WARP_SIZE - 1);
-                    __shfl_sync(0xffffffff, lane_id_of_found_collision, lane_id_of_found_collision);
                 }
+                __shfl_sync(0xffffffff, lane_id_of_found_collision, lane_id_of_found_collision);
+                printf("Set lane id and broadcast lane id to prevent intra-warp deadlock.\n");
 
                 // synchronize all threads in warp, and get "value" from lane 0
                 sync_warp_flag = TRUE;
                 __shfl_sync(0xffffffff, sync_warp_flag, lane_id_of_found_collision);
+                printf("Set sync_warp_flag and broadcast flag to prevent intra-warp deadlock.\n");
 
                 // threads will converge so that critical thread is not indefinitely suspended
                 while (sync_warp_flag) {
@@ -442,7 +444,7 @@ __global__ void find_collisions(volatile char* collision) {
         }
 
         // on next iter: try next random || gen new randoms and append last random to local_collision
-        local_collision[local_collision_size - 1] = randoms[random_index];
+        local_collision[local_collision_size - 1] = *((char*)(&randoms[random_index]));
         local_collision[local_collision_size] = '\0';
         ++random_index;
     }
@@ -571,7 +573,6 @@ void task1() {
     // WRITE COLLISIONS TO DISK
     //===========================================================================================================
 
-    printf("Original string: %s\n", h_sampleFile_buff);
     for (int i = 0; i < TARGET_COLLISIONS; ++i) {
         printf("Collision %d: %s\n", i, h_collisions[i]);
 
