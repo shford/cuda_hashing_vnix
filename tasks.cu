@@ -335,16 +335,19 @@ __global__ void find_collisions(volatile char* collision) {
         // generate a new batch of random numbers and append a random char to collision
         if (random_index == NUM_RANDOMS)
         {
-            // generate a new batch of randoms todo: make each random unique to the set
+            // generate a new batch of randoms
             random_index = 0;
+
+            // call curand_init outside the function
+            curandStatePhilox4_32_10_t state;
+            unsigned long long benchmark_seed = (threadIdx.x + blockIdx.x * blockDim.x) + global_seeder;
+            unsigned long long fair_seed = benchmark_seed + clock64();
+            curand_init(benchmark_seed, 0, 0, &state);
             for (int i = 0; i < FUNCTION_CALLS_NEEDED; ++i) {
-                curandStatePhilox4_32_10_t state;
-                int tid = threadIdx.x;  // randomize w/in warps (w/in lockstep)
-                ++global_seeder;        // randomize between warps (and blocks)
-                curand_init(tid+global_seeder, i, 0, &state);
                 // effectively assigns 4 random uint8_t's per execution
                 *((uint32_t *) (randoms + i * RAND_BIT_MULTIPLE)) = curand(&state);
             }
+            ++global_seeder;
 
             /*
             // resize local_collision
@@ -365,13 +368,10 @@ __global__ void find_collisions(volatile char* collision) {
                 //cudaFree(old_buff);
             }
             */
-
-            // permanently append a random char from the final position in randoms[]
-            ++local_collision_size;
         }
 
         // try (1..2^NUM_ENCODING_BITS-1) for local collision index
-
+        ++local_collision_size;
         for (int c = 1; c < CHAR_SET_SIZE; ++c) {
             // try charset
             local_collision[local_collision_size - 1] = c;
@@ -391,7 +391,7 @@ __global__ void find_collisions(volatile char* collision) {
 
             // we found a collision!
             if ((*((uint32_t *) &d_const_md5_digest) >> 12 == *((uint32_t *) &local_md5_digest) >> 12) || sync_warp_flag == TRUE) {
-                printf("%d thread id found hash first.\n", threadIdx.x);
+                printf("%d thread id in block %d found hash first in grid %d.\n", threadIdx.x, blockIdx.x);
 
                 // synchronize all threads in warp, and get "value" from lane 0
                 if (lane_id_of_found_collision == -1) {
