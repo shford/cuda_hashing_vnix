@@ -379,19 +379,19 @@ __global__ void find_collisions(volatile char* collision) {
 
             // generate new hash
             Md5Calculate_dev((const void *) local_collision, local_collision_size, &local_md5_digest);
-            for (int i = 0; i < MD5_HASH_SIZE / 2; ++i) {
-                printf("%2.2x", local_md5_digest.bytes[i]);
-            }
-            printf(" | ");
-            for (int i = 0; i < MD5_HASH_SIZE / 2; ++i) {
-                printf("%2.2x", d_const_md5_digest.bytes[i]);
-            }
-            printf(" | Attempt: %llu\n", d_collision_attempts);
             ++d_collision_attempts;
 
             // we found a collision!
             if ((*((uint32_t *) &d_const_md5_digest) >> 12 == *((uint32_t *) &local_md5_digest) >> 12) || sync_warp_flag == TRUE) {
                 printf("%d thread id in block %d found hash first in grid %d.\n", threadIdx.x, blockIdx.x, blockDim.x);
+                for (int i = 0; i < MD5_HASH_SIZE / 2; ++i) {
+                    printf("%2.2x", local_md5_digest.bytes[i]);
+                }
+                printf(" | ");
+                for (int i = 0; i < MD5_HASH_SIZE / 2; ++i) {
+                    printf("%2.2x", d_const_md5_digest.bytes[i]);
+                }
+                printf(" | Attempt: %llu\n", d_collision_attempts);
 
                 // synchronize all threads in warp, and get "value" from lane 0
                 if (lane_id_of_found_collision == -1) {
@@ -410,35 +410,52 @@ __global__ void find_collisions(volatile char* collision) {
                     // do mutex operations
                     if ((threadIdx.x & 0x1f) == lane_id_of_found_collision) {
                         printf("Thread %d in lane %d entered warp mutex.\n", threadIdx.x, lane_id_of_found_collision);
+                        printf("Collision hash length is : %llu.\n", local_collision_size);
                         // set mutex lock
+                        printf("Set mutex lock with atomicCAS.\n");
                         do {} while (atomicCAS((int*)&global_mutex, UNLOCKED, LOCKED));
+                        printf("Successfully set lock. Entering critical section.\n");
 
                         // enter critical section - writing for host polls and signalling when ready
+                        printf("Copying local_collision to collision.\n");
                         for (int byte_index = 0; byte_index <= local_collision_size; ++byte_index) {
                             collision[byte_index] = local_collision[byte_index];
                         }
+                        printf("Finished copying.\n");
+                        printf("Copying local_collision_size to global collision size.\n");
                         d_collision_size = local_collision_size;
+                        printf("Finished copying.\n");
 
                         // signal host to read
+                        printf("Signaling host to read.\n");
                         d_collision_flag = TRUE;
+                        printf("Success, signal set to %d.\n", d_collision_flag);
 
                         // free lock only once host signals finished reading (e.g. d_collision_flag = FALSE)
                         do {
-                            // thread idles while host updates
-                            // 1) d_num_collisions_found
-                            // 2) d_collision_flag
+                            // volatile keyword needed to keep busy loop from being optimized away
+                            volatile uint32_t idle_gpu_cycles = 0;
+                            uint32_t roughly_1centisecond = 17458790;
+                            while (idle_gpu_cycles < roughly_1centisecond) {
+                                idle_gpu_cycles += 1;
+                                // during these intervals the host has a chance to:
+                                // 1) write to d_num_collisions_found
+                                // 2) write to d_collision_flag
+                            }
                         } while (d_collision_flag);
+                        printf("Host successfully reset d_collision_flag.\n");
 
                         // safely unlock mutex by writing to flag - remember relaxed ordering doesn't matter here
+                        printf("Unlocking mutex lock.\n");
                         atomicExch((int*)&global_mutex, UNLOCKED);
-
-                        // release non-critical warp threads and reset flag
-                        sync_warp_flag = FALSE;
-                        __shfl_sync(0xffffffff, sync_warp_flag, lane_id_of_found_collision);
+                        printf("Successfully unlocked mutex lock.\n");
                     } else {
                         // have non-critical warp threads read check for
                     }
-                    __syncwarp(); // causes the executing thread to wait until all threads specified in mask have executed a __syncwarp()
+                    // release non-critical warp threads and reset flag
+                    printf("Signalling for warp to sync and to exit sync_warp loop.\n");
+                    sync_warp_flag = FALSE;
+                    __shfl_sync(0xffffffff, sync_warp_flag, lane_id_of_found_collision);
                 }
             }
         }
@@ -498,7 +515,7 @@ void task1() {
         h_collisions[i] = (char*)calloc(1, INITIAL_COLLISION_BUFF_SIZE);
         h_collision_sizes[i] = 0;
     }
-    int h_collision_flag = FALSE;
+    volatile int h_collision_flag = FALSE;
     printf("...Allocated host variables.\n");
 
     // allocate global mem for collision - initialized in loop
@@ -525,7 +542,8 @@ void task1() {
         while (!h_collision_flag)
         {
             // NOTE: errors on this line are most likely from the kernel
-            gpuErrchk( cudaMemcpyFromSymbol(&h_collision_flag, d_collision_flag, sizeof(h_collision_flag), 0, cudaMemcpyDeviceToHost));
+            gpuErrchk( cudaMemcpyFromSymbol((void *) &h_collision_flag, d_collision_flag, sizeof(h_collision_flag), 0, cudaMemcpyDeviceToHost));
+            printf("Read d_collision_flag in host. Value: %s.\n", h_collision_flag ? "TRUE" : "FALSE");
         }
 
         // read updated collision size, collision
@@ -543,7 +561,7 @@ void task1() {
         // reset flags to release device-wide mutex and reset kernel
         printf("...Resetting device flag.\n");
         h_collision_flag = FALSE;
-        cudaMemcpyToSymbol(d_collision_flag, &h_collision_flag, sizeof(h_collision_flag), 0, cudaMemcpyHostToDevice);
+        cudaMemcpyToSymbol(d_collision_flag, (const void *) &h_collision_flag, sizeof(h_collision_flag), 0, cudaMemcpyHostToDevice);
         printf("Done.\n\n");
     }
     
