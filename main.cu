@@ -35,7 +35,17 @@
 int main()
 {
     #if VALID_USER_INPUTS
-        printf("Hash Collider - Starting Task 1...");
+        int devices = 0;
+        cudaGetDeviceCount(&devices);
+
+        if (devices < 1) {
+            printf("No CUDA devices found!");
+            exit(0);
+        }
+        // initialize device
+        cudaSetDevice(0);
+
+        printf("Hash Collider - Starting Task 1...\n\n");
         task1();
         return 0;
     #else
