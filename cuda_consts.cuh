@@ -134,7 +134,7 @@
 //===========================================================================================================
 #define TARGET_COLLISIONS 1                               // must be -leq num threads per kernel
 #define NUM_ENCODING_BITS 8                               // options are 8, 16, 32 bits (rand gen limitation)
-#define INITIAL_COLLISION_BUFF_SIZE 400000                 // must be % 8 - recommend min of 15000
+#define INITIAL_COLLISION_BUFF_SIZE 20000                 // must be % 8 - recommend min of 15000
 #define BLOCKS_PER_KERNEL 1                 // must be -leq Compute limit - recommend eq MP
 #define THREADS_PER_BLOCK 1   // must be -leq Compute limit - recommend eq Cores/MP
 #define NUM_RANDOMS 48                                    // tweak for efficiency - recommend ~50
